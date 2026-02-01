@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Collaborative Canvas: Ultimate</title>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #222;
+            font-family: sans-serif;
+        }
+
+        canvas {
+            touch-action: none;
+            display: block;
+            background: #fff;
+            cursor: crosshair;
+        }
+
+        #ui {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 12px;
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            align-items: flex-start;
+            font-size: 14px;
+            z-index: 10;
+        }
+
+        button {
+            cursor: pointer;
+            padding: 6px 12px;
+            border: 1px solid #ccc;
+            background: #eee;
+            border-radius: 4px;
+            width: 100%;
+        }
+
+        #status {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-weight: bold;
+            font-size: 12px;
+        }
+
+        .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #ccc;
+        }
+
+        .connected {
+            background: #4CAF50;
+            box-shadow: 0 0 5px #4CAF50;
+        }
+
+        .error {
+            background: #f44336;
+        }
+
+        .hints {
+            font-size: 10px;
+            color: #666;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div id="ui">
+        <div id="status">
+            <div class="dot" id="statusDot"></div> <span id="statusText">Initializing...</span>
+        </div>
+        <div style="font-size:10px; color:#666" id="peerIdDisplay"></div>
+        <button onclick="copyLink()">Copy Join Link</button>
+        <button onclick="clearCanvas()">Clear Canvas</button>
+        <div class="hints">
+            <b>Controls:</b><br>
+            • Draw: 1 Finger / Left Click<br>
+            • Pan: 2 Fingers / Middle Click<br>
+            • Zoom: Pinch / Scroll Wheel
+        </div>
+    </div>
+
+    <canvas id="c"></canvas>
+
+    <script type="module">
+        import * as Y from 'https://esm.sh/yjs@13.6.8';
+
+        // --- 1. CONFIGURATION & NETWORK ---
+        const urlParams = new URLSearchParams(window.location.search);
+        let hostId = urlParams.get('id');
+        const isHost = !hostId;
+
+        const doc = new Y.Doc();
+        const yStrokes = doc.getArray('strokes');
+
+        class PeerJsProvider {
+            constructor(doc, peer) {
+                this.doc = doc;
+                this.peer = peer;
+                this.connections = [];
+
+                doc.on('update', (update) => this.broadcast(update));
+                peer.on('connection', (conn) => this.registerConnection(conn));
+            }
+
+            connectTo(remotePeerId) {
+                const conn = this.peer.connect(remotePeerId);
+                this.registerConnection(conn);
+            }
+
+            registerConnection(conn) {
+                this.connections.push(conn);
+                updateStatus(this.connections.length);
+
+                conn.on('open', () => {
+                    const stateVector = Y.encodeStateVector(this.doc);
+                    conn.send({ type: 'sync-step-1', data: stateVector });
+                });
+
+                conn.on('data', (msg) => this.handleMessage(conn, msg));
+                conn.on('close', () => {
+                    this.connections = this.connections.filter(c => c !== conn);
+                    updateStatus(this.connections.length);
+                });
+            }
+
+            handleMessage(conn, msg) {
+                if (msg instanceof Uint8Array || msg instanceof ArrayBuffer) {
+                    Y.applyUpdate(this.doc, new Uint8Array(msg));
+                } else if (typeof msg === 'object') {
+                    if (msg.type === 'sync-step-1') {
+                        const targetStateVector = new Uint8Array(msg.data);
+                        const diff = Y.encodeStateAsUpdate(this.doc, targetStateVector);
+                        if (diff.byteLength > 0) conn.send({ type: 'sync-update', data: diff });
+                    } else if (msg.type === 'sync-update') {
+                        Y.applyUpdate(this.doc, new Uint8Array(msg.data));
+                    }
+                }
+            }
+
+            broadcast(update) {
+                this.connections.forEach(conn => {
+                    if (conn.open) conn.send(update);
+                });
+            }
+        }
+
+        const peer = new Peer();
+        let provider;
+
+        peer.on('open', (id) => {
+            provider = new PeerJsProvider(doc, peer);
+            if (isHost) {
+                document.getElementById('peerIdDisplay').innerText = "Host ID: " + id;
+                window.history.replaceState(null, null, `${window.location.pathname}?id=${id}`);
+            } else {
+                document.getElementById('peerIdDisplay').innerText = "Guest Mode";
+                provider.connectTo(hostId);
+            }
+        });
+
+        function updateStatus(count) {
+            const text = document.getElementById('statusText');
+            const dot = document.getElementById('statusDot');
+            if (count > 0) {
+                text.innerText = `Online (${count})`;
+                dot.className = "dot connected";
+            } else {
+                text.innerText = "Waiting...";
+                dot.className = "dot";
+            }
+        }
+
+        // --- 2. ADVANCED INPUT HANDLING ---
+
+        const canvas = document.getElementById('c');
+        const ctx = canvas.getContext('2d');
+        let pointers = new Map();
+
+        // Viewport State
+        let camera = { x: 0, y: 0, zoom: 1 };
+
+        // Interaction State
+        let currentStrokeYArray = null;
+        let isPanning = false; // Tracks middle-click drag
+        let lastPinchDist = 0;
+        let lastMidpoint = null;
+
+        yStrokes.observeDeep(() => requestAnimationFrame(render));
+
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            render();
+        }
+        window.onresize = resize;
+        resize();
+
+        function screenToWorld(sx, sy) {
+            return { x: (sx - camera.x) / camera.zoom, y: (sy - camera.y) / camera.zoom };
+        }
+
+        function getMidpoint(p1, p2) {
+            return { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+        }
+
+        // --- Mouse Wheel Zoom ---
+        canvas.addEventListener('wheel', e => {
+            e.preventDefault();
+            const zoomSensitivity = 0.001;
+            const delta = -e.deltaY * zoomSensitivity;
+            const factor = 1 + delta;
+
+            // Zoom towards mouse pointer
+            const mouseX = e.clientX;
+            const mouseY = e.clientY;
+
+            const newZoom = Math.min(Math.max(camera.zoom * factor, 0.1), 10);
+
+            // Calculate new camera position to keep mouse pointer stable
+            camera.x = mouseX - (mouseX - camera.x) * (newZoom / camera.zoom);
+            camera.y = mouseY - (mouseY - camera.y) * (newZoom / camera.zoom);
+            camera.zoom = newZoom;
+
+            render();
+        }, { passive: false });
+
+        // --- Pointer Events (Touch, Pen, Mouse) ---
+
+        canvas.addEventListener('pointerdown', e => {
+            canvas.setPointerCapture(e.pointerId);
+            pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+            // Case A: Middle Click (Button 1) -> Start Pan
+            if (e.button === 1) {
+                isPanning = true;
+                canvas.style.cursor = 'grab';
+                return;
+            }
+
+            // Case B: Two Fingers -> Start Pinch/Pan
+            if (pointers.size === 2) {
+                currentStrokeYArray = null; // Cancel any drawing
+                lastPinchDist = 0;
+                lastMidpoint = null;
+                return;
+            }
+
+            // Case C: One Finger / Left Click -> Start Draw
+            if (pointers.size === 1 && e.button === 0 && !isPanning) {
+                doc.transact(() => {
+                    const newStrokeMap = new Y.Map();
+                    const newPointsArray = new Y.Array();
+                    newStrokeMap.set('color', '#000');
+                    newStrokeMap.set('points', newPointsArray);
+
+                    const worldPos = screenToWorld(e.clientX, e.clientY);
+                    // Use hardware pressure, fallback to 0.5
+                    const pressure = e.pressure !== 0.5 && e.pressure > 0 ? e.pressure : 0.5;
+                    newPointsArray.push([{ x: worldPos.x, y: worldPos.y, p: pressure }]);
+
+                    yStrokes.push([newStrokeMap]);
+                    currentStrokeYArray = newPointsArray;
+                });
+            }
+        });
+
+        canvas.addEventListener('pointermove', e => {
+            if (!pointers.has(e.pointerId)) return;
+            const p = pointers.get(e.pointerId);
+
+            // Case A: Middle Mouse Pan
+            if (isPanning) {
+                const dx = e.clientX - p.x;
+                const dy = e.clientY - p.y;
+                camera.x += dx;
+                camera.y += dy;
+                render();
+            }
+            // Case B: Drawing (1 pointer, no pan)
+            else if (pointers.size === 1 && currentStrokeYArray) {
+                const worldPos = screenToWorld(e.clientX, e.clientY);
+                const pressure = e.pressure !== 0.5 && e.pressure > 0 ? e.pressure : 0.5;
+                currentStrokeYArray.push([{ x: worldPos.x, y: worldPos.y, p: pressure }]);
+            }
+            // Case C: Multi-touch Pan & Zoom
+            else if (pointers.size === 2) {
+                const pts = Array.from(pointers.values());
+                // Update the moved pointer in our local map
+                if (pts[0] === p) { pts[0].x = e.clientX; pts[0].y = e.clientY; }
+                else { pts[1].x = e.clientX; pts[1].y = e.clientY; }
+
+                const p1 = pts[0];
+                const p2 = pts[1];
+
+                // 1. Pan
+                const midpoint = getMidpoint(p1, p2);
+                if (lastMidpoint) {
+                    camera.x += midpoint.x - lastMidpoint.x;
+                    camera.y += midpoint.y - lastMidpoint.y;
+                }
+                lastMidpoint = midpoint;
+
+                // 2. Zoom
+                const dist = Math.hypot(p1.x - p2.x, p1.y - p2.y);
+                if (lastPinchDist > 0) {
+                    const factor = dist / lastPinchDist;
+                    const newZoom = Math.min(Math.max(camera.zoom * factor, 0.1), 10);
+
+                    // Zoom towards the midpoint of the two fingers
+                    camera.x = midpoint.x - (midpoint.x - camera.x) * (newZoom / camera.zoom);
+                    camera.y = midpoint.y - (midpoint.y - camera.y) * (newZoom / camera.zoom);
+                    camera.zoom = newZoom;
+                }
+                lastPinchDist = dist;
+                render();
+            }
+
+            // Update last position
+            p.x = e.clientX;
+            p.y = e.clientY;
+        });
+
+        canvas.addEventListener('pointerup', e => {
+            pointers.delete(e.pointerId);
+            currentStrokeYArray = null;
+
+            // Reset Pan/Zoom states
+            if (pointers.size < 2) {
+                lastPinchDist = 0;
+                lastMidpoint = null;
+            }
+            if (e.button === 1) {
+                isPanning = false;
+                canvas.style.cursor = 'crosshair';
+            }
+        });
+
+        function render() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.save();
+
+            // Apply Camera Transform
+            ctx.translate(camera.x, camera.y);
+            ctx.scale(camera.zoom, camera.zoom);
+
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+
+            yStrokes.forEach(strokeMap => {
+                const points = strokeMap.get('points');
+                if (!points || points.length < 2) return;
+                const pts = points.toArray();
+                ctx.beginPath();
+                for (let i = 1; i < pts.length; i++) {
+                    const p1 = pts[i - 1];
+                    const p2 = pts[i];
+
+                    // Scale linewidth inversely with zoom so it stays consistent in world space
+                    // OR allow it to zoom (user preference). Usually, we want strokes to look "zoomed in".
+                    // Current: Stroke width grows when you zoom in (like a real paper).
+                    ctx.lineWidth = 1 + (p1.p * 10);
+
+                    ctx.beginPath();
+                    ctx.moveTo(p1.x, p1.y);
+                    ctx.lineTo(p2.x, p2.y);
+                    ctx.stroke();
+                }
+            });
+            ctx.restore();
+        }
+
+        window.copyLink = () => {
+            navigator.clipboard.writeText(window.location.href);
+            alert("Link copied!");
+        };
+
+        window.clearCanvas = () => {
+            doc.transact(() => yStrokes.delete(0, yStrokes.length));
+        };
+    </script>
+</body>
+
+</html>
