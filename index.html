@@ -3,7 +3,7 @@
 
 <head>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Collaborative Canvas: Ultimate</title>
+    <title>Collaborative Canvas: Robust</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
         body {
@@ -32,7 +32,7 @@
             display: flex;
             flex-direction: column;
             gap: 10px;
-            width: 180px;
+            width: 200px;
             max-height: 90vh;
             overflow-y: auto;
             z-index: 10;
@@ -41,7 +41,7 @@
         /* --- BUTTONS & INPUTS --- */
         button {
             cursor: pointer;
-            padding: 8px;
+            padding: 10px;
             border: 1px solid #ddd;
             background: #f5f5f5;
             border-radius: 6px;
@@ -90,6 +90,8 @@
             font-weight: bold;
             font-size: 13px;
             margin-bottom: 5px;
+            padding-bottom: 5px;
+            border-bottom: 1px solid #eee;
         }
 
         .dot {
@@ -104,11 +106,14 @@
             background: #4CAF50;
             box-shadow: 0 0 6px #4CAF50;
         }
+        
+        .error-dot {
+            background: #f44336;
+            box-shadow: 0 0 6px #f44336;
+        }
 
         #userList {
-            margin-top: 10px;
-            border-top: 1px solid #eee;
-            padding-top: 10px;
+            margin-top: 5px;
             font-size: 12px;
         }
 
@@ -118,12 +123,14 @@
             gap: 5px;
             margin-bottom: 4px;
             color: #444;
+            padding: 2px 0;
         }
 
         .user-color-indicator {
-            width: 8px;
-            height: 8px;
+            width: 10px;
+            height: 10px;
             border-radius: 2px;
+            border: 1px solid #ddd;
         }
 
         .hints {
@@ -134,6 +141,13 @@
             border-top: 1px solid #eee;
             padding-top: 8px;
         }
+        
+        #errorMsg {
+            color: #f44336;
+            font-size: 11px;
+            display: none;
+            margin-bottom: 5px;
+        }
     </style>
 </head>
 
@@ -142,8 +156,9 @@
     <div id="ui">
         <div id="status">
             <div class="dot" id="statusDot"></div>
-            <span id="statusText">Connecting...</span>
+            <span id="statusText">Initializing...</span>
         </div>
+        <div id="errorMsg"></div>
         <div style="font-size:10px; color:#999; margin-bottom:5px; word-break: break-all;" id="peerIdDisplay"></div>
 
         <div class="color-row">
@@ -183,10 +198,11 @@
             return `${adj} ${anim}`;
         }
 
-        // Initialize User
         const defaultName = getRandomName();
-        const userName = prompt("Enter your name for this session:", defaultName) || defaultName;
-        // Random Hex Color for UI identifier
+        // Simple check to avoid prompt if just reloading
+        const userName = sessionStorage.getItem('userName') || prompt("Enter your name:", defaultName) || defaultName;
+        sessionStorage.setItem('userName', userName);
+        
         const userUiColor = '#' + Math.floor(Math.random() * 16777215).toString(16).padStart(6, '0');
 
         const currentUser = {
@@ -202,7 +218,7 @@
 
         const doc = new Y.Doc();
         const yStrokes = doc.getArray('strokes');
-        const yUsers = doc.getMap('users'); // Syncs connected users
+        const yUsers = doc.getMap('users'); 
 
         // --- 3. ROBUST NETWORK PROVIDER ---
         class PeerJsProvider {
@@ -213,36 +229,48 @@
 
                 // Listen for local Yjs updates and broadcast them
                 doc.on('update', (update, origin) => {
-                    if (origin !== this) { // Only broadcast if update didn't come from network
+                    if (origin !== this) {
                         this.broadcast({ type: 'sync-update', data: Array.from(update) });
                     }
                 });
 
                 peer.on('connection', (conn) => this.handleConnection(conn));
+                
+                // Heartbeat to keep connections alive
+                setInterval(() => this.broadcast({ type: 'ping' }), 3000);
             }
 
             connectTo(remotePeerId) {
+                console.log("Attempting to connect to host:", remotePeerId);
                 const conn = this.peer.connect(remotePeerId, { reliable: true });
                 this.handleConnection(conn);
+                
+                // Connection Timeout Fallback
+                setTimeout(() => {
+                    if(!conn.open) {
+                        showError("Connection timed out. Host might be offline.");
+                    }
+                }, 8000);
             }
 
             handleConnection(conn) {
                 conn.on('open', () => {
+                    console.log("Connection opened:", conn.peer);
                     this.connections.set(conn.peer, conn);
                     updateStatus(this.connections.size);
+                    hideError();
                     
-                    // 1. Send Initial Sync (State Vector)
+                    // 1. Send Initial Sync
                     const stateVector = Y.encodeStateVector(this.doc);
                     conn.send({ type: 'sync-step-1', data: Array.from(stateVector) });
 
-                    // 2. Announce Self to new peer
+                    // 2. Announce Self
                     conn.send({ type: 'announce-user', user: { id: this.peer.id, ...currentUser } });
                     
-                    // 3. If Host, cleanup on disconnect
                     if (isHost) {
                         conn.on('close', () => {
                             this.connections.delete(conn.peer);
-                            yUsers.delete(conn.peer); // Remove user from shared map
+                            yUsers.delete(conn.peer);
                             updateStatus(this.connections.size);
                         });
                     }
@@ -251,38 +279,39 @@
                 conn.on('data', (msg) => this.handleMessage(conn, msg));
                 
                 conn.on('close', () => {
+                    console.log("Connection closed:", conn.peer);
                     this.connections.delete(conn.peer);
                     updateStatus(this.connections.size);
+                    if(!isHost && this.connections.size === 0) {
+                        showError("Disconnected from Host.");
+                    }
                 });
                 
-                conn.on('error', (err) => console.error("Conn Error:", err));
+                conn.on('error', (err) => {
+                    console.error("Conn Error:", err);
+                    if(!isHost) showError("Connection error.");
+                });
             }
 
             handleMessage(conn, msg) {
-                // Ensure msg is an object
                 if (typeof msg !== 'object') return;
 
                 switch (msg.type) {
                     case 'sync-step-1':
-                        // Received State Vector, reply with Update
                         const targetStateVector = new Uint8Array(msg.data);
                         const diff = Y.encodeStateAsUpdate(this.doc, targetStateVector);
                         if (diff.byteLength > 0) {
                             conn.send({ type: 'sync-update', data: Array.from(diff) });
                         }
                         break;
-
                     case 'sync-update':
-                        // Apply update from network
-                        // 'this' is passed as origin to prevent echo
                         Y.applyUpdate(this.doc, new Uint8Array(msg.data), this);
                         break;
-
                     case 'announce-user':
-                        // Peer announced their name. If we are Host, we add them to the Y.Map
-                        if (isHost) {
-                            yUsers.set(msg.user.id, msg.user);
-                        }
+                        if (isHost) yUsers.set(msg.user.id, msg.user);
+                        break;
+                    case 'ping':
+                        // Heartbeat received, connection is good.
                         break;
                 }
             }
@@ -294,43 +323,82 @@
             }
         }
 
-        // --- 4. INITIALIZATION ---
-        const peer = new Peer(null, { debug: 1 });
+        // --- 4. INITIALIZATION & ERROR HANDLING ---
+        const peer = new Peer(null, { 
+            debug: 1,
+            config: {
+                'iceServers': [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:global.stun.twilio.com:3478' }
+                ]
+            }
+        });
+        
         let provider;
 
         peer.on('open', (id) => {
+            console.log("My Peer ID:", id);
             provider = new PeerJsProvider(doc, peer);
 
             if (isHost) {
                 document.getElementById('peerIdDisplay').innerText = "Host ID: " + id;
                 window.history.replaceState(null, null, `${window.location.pathname}?id=${id}`);
-                
-                // Add Host to the user list immediately
                 yUsers.set(id, { id, ...currentUser });
+                updateStatus(0);
             } else {
-                document.getElementById('peerIdDisplay').innerText = "Guest";
-                provider.connectTo(hostId);
-                
-                // Guests don't write to yUsers directly; they announce to Host.
-                // But for local UI consistency, we can rely on yUsers updates.
+                document.getElementById('peerIdDisplay').innerText = "Guest Mode";
+                if(hostId) {
+                    provider.connectTo(hostId);
+                } else {
+                    showError("No Host ID found in URL.");
+                }
             }
-            updateStatus(0);
         });
 
-        // --- 5. UI UPDATES (User List) ---
+        peer.on('error', (err) => {
+            console.error("PeerJS Error:", err.type, err);
+            if(err.type === 'peer-unavailable') {
+                showError("Host not found. ID might be invalid or host is offline.");
+            } else if (err.type === 'network') {
+                showError("Network error. Lost connection to server.");
+            } else {
+                showError(`Error: ${err.type}`);
+            }
+        });
+
+        peer.on('disconnected', () => {
+            console.log("Disconnected from signalling server. Reconnecting...");
+            // Attempt auto-reconnect to signaling server
+            peer.reconnect();
+        });
+
+        function showError(msg) {
+            const el = document.getElementById('errorMsg');
+            el.style.display = 'block';
+            el.innerText = msg;
+            document.getElementById('statusDot').className = "dot error-dot";
+            document.getElementById('statusText').innerText = "Error";
+        }
+        
+        function hideError() {
+            document.getElementById('errorMsg').style.display = 'none';
+        }
+
         function updateStatus(count) {
             const text = document.getElementById('statusText');
             const dot = document.getElementById('statusDot');
-            if (count > 0 || !isHost) {
-                text.innerText = `Online`;
+            
+            // Host is always "online" if peer is open. Guest is online if connected to host (count > 0).
+            if ((isHost && !peer.disconnected) || (!isHost && count > 0)) {
+                text.innerText = isHost ? `Hosting (${count})` : `Connected`;
                 dot.className = "dot connected";
             } else {
-                text.innerText = "Waiting for connections...";
+                text.innerText = "Waiting...";
                 dot.className = "dot";
             }
         }
 
-        // Render User List whenever yUsers changes
+        // --- 5. UI: USER LIST ---
         yUsers.observe(() => {
             const container = document.getElementById('usersContainer');
             container.innerHTML = '';
@@ -346,7 +414,7 @@
             });
         });
 
-        // --- 6. CANVAS & INTERACTION LOGIC ---
+        // --- 6. CANVAS & INTERACTION ---
         const canvas = document.getElementById('c');
         const ctx = canvas.getContext('2d');
         const colorInput = document.getElementById('colorPicker');
@@ -425,7 +493,6 @@
                 const pressure = e.pressure !== 0.5 && e.pressure > 0 ? e.pressure : 0.5;
                 currentStrokeYArray.push([{ x: worldPos.x, y: worldPos.y, p: pressure }]);
             } else if (pointers.size === 2) {
-                // Multi-touch logic (Pinch/Zoom)
                 const pts = Array.from(pointers.values());
                 if (pts[0] === p) { pts[0].x = e.clientX; pts[0].y = e.clientY; }
                 else { pts[1].x = e.clientX; pts[1].y = e.clientY; }
@@ -473,7 +540,6 @@
                 ctx.strokeStyle = strokeMap.get('color') || '#000';
                 
                 ctx.beginPath();
-                // Simple stroke rendering
                 for (let i = 1; i < pts.length; i++) {
                     const p1 = pts[i - 1];
                     const p2 = pts[i];
