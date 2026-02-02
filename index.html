@@ -3,7 +3,7 @@
 
 <head>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Collaborative Canvas: Multi-User Sync</title>
+    <title>Collaborative Canvas: Ultimate</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
         body {
@@ -20,12 +20,13 @@
             cursor: crosshair;
         }
 
+        /* --- UI CONTAINER --- */
         #ui {
             position: absolute;
             top: 10px;
             right: 10px;
             background: rgba(255, 255, 255, 0.98);
-            padding: 15px;
+            padding: 12px;
             border-radius: 12px;
             box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3);
             display: flex;
@@ -35,45 +36,29 @@
             max-height: 90vh;
             overflow-y: auto;
             z-index: 10;
+            transition: all 0.3s ease;
         }
 
-        button {
-            cursor: pointer;
-            padding: 10px;
-            border: 1px solid #ddd;
-            background: #f5f5f5;
-            border-radius: 6px;
-            width: 100%;
-            font-size: 13px;
-            font-weight: 600;
-            transition: background 0.2s;
+        /* Collapsed State */
+        #ui.collapsed {
+            width: 140px;
+            height: 40px;
+            /* Only show header */
+            overflow: hidden;
+            padding: 8px 12px;
         }
 
-        button:hover { background: #e0e0e0; }
-
-        .btn-primary {
-            background: #2196F3;
-            color: white;
-            border: none;
+        #ui.collapsed>*:not(#statusHeader) {
+            display: none !important;
         }
 
-        .btn-primary:hover { background: #1976D2; }
-
-        .color-row {
+        /* --- HEADER & TOGGLE --- */
+        #statusHeader {
             display: flex;
-            align-items: center;
             justify-content: space-between;
-            font-size: 13px;
-            font-weight: bold;
-            color: #444;
-        }
-
-        input[type="color"] {
-            border: none;
-            width: 40px;
-            height: 30px;
+            align-items: center;
+            width: 100%;
             cursor: pointer;
-            background: none;
         }
 
         #status {
@@ -82,21 +67,87 @@
             gap: 6px;
             font-weight: bold;
             font-size: 13px;
-            margin-bottom: 5px;
-            padding-bottom: 5px;
-            border-bottom: 1px solid #eee;
         }
 
+        .toggle-btn {
+            font-size: 18px;
+            line-height: 1;
+            padding: 0 5px;
+            color: #666;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        /* --- PALETTE --- */
+        .palette {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 6px;
+            margin-bottom: 5px;
+        }
+
+        .swatch {
+            width: 100%;
+            aspect-ratio: 1;
+            border-radius: 4px;
+            cursor: pointer;
+            border: 2px solid transparent;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .swatch:hover {
+            transform: scale(1.1);
+        }
+
+        .swatch.active {
+            border-color: #333;
+            transform: scale(0.9);
+            box-shadow: none;
+        }
+
+        /* --- BUTTONS --- */
+        button {
+            cursor: pointer;
+            padding: 10px;
+            border: 1px solid #ddd;
+            background: #f5f5f5;
+            border-radius: 6px;
+            width: 100%;
+            font-weight: 600;
+            font-size: 12px;
+            transition: background 0.2s;
+        }
+
+        button:hover {
+            background: #e0e0e0;
+        }
+
+        .btn-primary {
+            background: #2196F3;
+            color: white;
+            border: none;
+        }
+
+        .btn-primary:hover {
+            background: #1976D2;
+        }
+
+        /* --- LISTS & UTILS --- */
         .dot {
             width: 10px;
             height: 10px;
             border-radius: 50%;
             background: #ccc;
-            transition: background 0.3s;
         }
 
-        .connected { background: #4CAF50; box-shadow: 0 0 6px #4CAF50; }
-        .error-dot { background: #f44336; box-shadow: 0 0 6px #f44336; }
+        .connected {
+            background: #4CAF50;
+            box-shadow: 0 0 6px #4CAF50;
+        }
+
+        .error-dot {
+            background: #f44336;
+        }
 
         #userList {
             margin-top: 5px;
@@ -109,9 +160,6 @@
             gap: 8px;
             margin-bottom: 6px;
             color: #444;
-            padding: 4px;
-            background: #f9f9f9;
-            border-radius: 4px;
         }
 
         .user-color-indicator {
@@ -121,20 +169,20 @@
             border: 1px solid #ddd;
         }
 
-        .hints {
-            font-size: 11px;
-            color: #888;
-            margin-top: 10px;
-            line-height: 1.4;
-            border-top: 1px solid #eee;
-            padding-top: 8px;
-        }
-        
         #errorMsg {
             color: #f44336;
             font-size: 11px;
             display: none;
             margin-bottom: 5px;
+        }
+
+        .hints {
+            font-size: 11px;
+            color: #888;
+            margin-top: 10px;
+            border-top: 1px solid #eee;
+            padding-top: 8px;
+            line-height: 1.4;
         }
     </style>
 </head>
@@ -142,17 +190,19 @@
 <body>
 
     <div id="ui">
-        <div id="status">
-            <div class="dot" id="statusDot"></div>
-            <span id="statusText">Initializing...</span>
+        <div id="statusHeader" onclick="toggleUI()">
+            <div id="status">
+                <div class="dot" id="statusDot"></div>
+                <span id="statusText">Initializing...</span>
+            </div>
+            <div class="toggle-btn" id="toggleIcon">−</div>
         </div>
-        <div id="errorMsg"></div>
-        <div style="font-size:10px; color:#999; margin-bottom:5px; word-break: break-all;" id="peerIdDisplay"></div>
 
-        <div class="color-row">
-            <span>Brush Color:</span>
-            <input type="color" id="colorPicker" value="#000000">
-        </div>
+        <div id="errorMsg"></div>
+        <div style="font-size:10px; color:#999; margin-bottom:0px; word-break: break-all;" id="peerIdDisplay"></div>
+
+        <div style="font-size:12px; font-weight:bold; color:#444;">Brush Color:</div>
+        <div class="palette" id="paletteContainer"></div>
 
         <button onclick="copyLink()">🔗 Copy Link</button>
         <button onclick="clearCanvas()">🧹 Clear Canvas</button>
@@ -165,9 +215,9 @@
 
         <div class="hints">
             <b>Controls:</b><br>
-            • Draw: Left Click / Touch<br>
-            • Pan: Middle Click / 2 Fingers<br>
-            • Zoom: Wheel / Pinch
+            • Draw: 1 Finger / Left Click<br>
+            • Pan: 2 Fingers / Middle<br>
+            • Zoom: Pinch / Scroll Wheel
         </div>
     </div>
 
@@ -176,9 +226,62 @@
     <script type="module">
         import * as Y from 'https://esm.sh/yjs@13.6.8';
 
-        // --- 1. USER IDENTITY SYSTEM ---
-        const ADJECTIVES = ['Neon', 'Crimson', 'Azure', 'Golden', 'Silent', 'Brave', 'Cosmic', 'Swift', 'Happy', 'Lucky'];
-        const ANIMALS = ['Fox', 'Tiger', 'Bear', 'Eagle', 'Panda', 'Wolf', 'Hawk', 'Badger', 'Cat', 'Lion'];
+        // --- 1. UI & PALETTE SYSTEM ---
+
+        const COLORS = [
+            '#000000', // Black
+            '#F44336', // Red
+            '#FF9800', // Orange
+            '#FFEB3B', // Yellow
+            '#4CAF50', // Green
+            '#2196F3', // Blue
+            '#9C27B0', // Purple
+            '#795548', // Brown
+        ];
+
+        // Randomly pick one color index for this user
+        const myColorIndex = Math.floor(Math.random() * COLORS.length);
+        let selectedColor = COLORS[myColorIndex];
+
+        // Build Palette UI
+        const paletteContainer = document.getElementById('paletteContainer');
+        COLORS.forEach(color => {
+            const el = document.createElement('div');
+            el.className = 'swatch';
+            el.style.backgroundColor = color;
+            if (color === selectedColor) {
+                el.classList.add('active');
+            }
+
+            el.onclick = () => {
+                selectedColor = color;
+                // Update UI active state
+                document.querySelectorAll('.swatch').forEach(s => s.classList.remove('active'));
+                el.classList.add('active');
+            };
+            paletteContainer.appendChild(el);
+        });
+
+        // Toggle UI logic
+        let isCollapsed = false;
+        window.toggleUI = (e) => {
+            const ui = document.getElementById('ui');
+            const icon = document.getElementById('toggleIcon');
+            isCollapsed = !isCollapsed;
+
+            if (isCollapsed) {
+                ui.classList.add('collapsed');
+                icon.innerText = '+';
+            } else {
+                ui.classList.remove('collapsed');
+                icon.innerText = '−';
+            }
+        };
+
+        // --- 2. USER IDENTITY SYSTEM ---
+
+        const ADJECTIVES = ['Neon', 'Crimson', 'Azure', 'Golden', 'Silent', 'Brave', 'Cosmic', 'Swift'];
+        const ANIMALS = ['Fox', 'Tiger', 'Bear', 'Eagle', 'Panda', 'Wolf', 'Hawk', 'Badger'];
 
         function getRandomName() {
             const adj = ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)];
@@ -189,77 +292,71 @@
         const defaultName = getRandomName();
         const userName = sessionStorage.getItem('userName') || prompt("Enter your name:", defaultName) || defaultName;
         sessionStorage.setItem('userName', userName);
-        
-        // Assign a persistent random color for the UI list
-        let userUiColor = sessionStorage.getItem('userColor');
-        if (!userUiColor) {
-            userUiColor = '#' + Math.floor(Math.random() * 16777215).toString(16).padStart(6, '0');
-            sessionStorage.setItem('userColor', userUiColor);
-        }
 
+        // Sync UI color with the drawing color we selected
         const currentUser = {
             name: userName,
-            uiColor: userUiColor,
+            uiColor: selectedColor,
             isSelf: true
         };
 
-        // --- 2. CONFIGURATION & YJS SETUP ---
+        // --- 3. CONFIGURATION & YJS SETUP ---
+
         const urlParams = new URLSearchParams(window.location.search);
         let hostId = urlParams.get('id');
         const isHost = !hostId;
 
         const doc = new Y.Doc();
         const yStrokes = doc.getArray('strokes');
-        const yUsers = doc.getMap('users'); 
+        const yUsers = doc.getMap('users');
 
-        // --- 3. RELAY NETWORK PROVIDER ---
+        // --- 4. SCALABLE NETWORK (Hybrid Protocol + Host Relay) ---
+
         class PeerJsProvider {
             constructor(doc, peer) {
                 this.doc = doc;
                 this.peer = peer;
                 this.connections = new Map();
 
-                // Listen for LOCAL updates and broadcast them
                 doc.on('update', (update, origin) => {
-                    // origin === this means the update came from the network
-                    // origin === null or 'transaction' means it was a local user action
+                    // origin !== this means the update was generated locally (drawing)
+                    // If origin === this, it came from network, so we don't echo it here
                     if (origin !== this) {
-                        this.broadcast({ type: 'sync-update', data: Array.from(update) });
+                        this.broadcast(update);
                     }
                 });
 
                 peer.on('connection', (conn) => this.handleConnection(conn));
-                
+
                 // Heartbeat to keep connections alive
-                setInterval(() => this.broadcast({ type: 'ping' }), 4000);
+                setInterval(() => this.broadcast({ type: 'ping' }), 5000);
             }
 
             connectTo(remotePeerId) {
-                console.log("Connecting to host:", remotePeerId);
                 const conn = this.peer.connect(remotePeerId, { reliable: true });
                 this.handleConnection(conn);
-                
+
                 setTimeout(() => {
-                    if(!conn.open) showError("Connection timed out. Host offline?");
+                    if (!conn.open) {
+                        showError("Connection timed out.");
+                    }
                 }, 8000);
             }
 
             handleConnection(conn) {
                 conn.on('open', () => {
-                    console.log("Connected to:", conn.peer);
                     this.connections.set(conn.peer, conn);
                     updateStatus(this.connections.size);
                     hideError();
-                    
-                    // 1. Send Sync Step 1 (State Vector)
+
+                    // Send Sync Step 1 (State Vector) via JSON wrapper
                     const stateVector = Y.encodeStateVector(this.doc);
                     conn.send({ type: 'sync-step-1', data: Array.from(stateVector) });
 
-                    // 2. Announce Self
+                    // Announce Self
                     conn.send({ type: 'announce-user', user: { id: this.peer.id, ...currentUser } });
-                    
+
                     if (isHost) {
-                        // Host logic: Clean up user list on disconnect
                         conn.on('close', () => {
                             this.connections.delete(conn.peer);
                             yUsers.delete(conn.peer);
@@ -269,66 +366,73 @@
                 });
 
                 conn.on('data', (msg) => this.handleMessage(conn, msg));
-                
+
                 conn.on('close', () => {
                     this.connections.delete(conn.peer);
                     updateStatus(this.connections.size);
-                    if(!isHost) showError("Disconnected from Host.");
+                    if (!isHost) {
+                        showError("Disconnected from Host.");
+                    }
                 });
-                
+
                 conn.on('error', (err) => console.error("Conn Error:", err));
             }
 
             handleMessage(conn, msg) {
-                if (typeof msg !== 'object') return;
+                // DETECT MESSAGE TYPE
+                // 1. If it's an ArrayBuffer/Uint8Array, it is a Yjs Update (Heavy Data)
+                // We handle this separately to avoid JSON serialization crash
+                if (msg instanceof ArrayBuffer || msg instanceof Uint8Array) {
+                    const update = new Uint8Array(msg);
+                    Y.applyUpdate(this.doc, update, this);
 
-                switch (msg.type) {
-                    case 'sync-step-1':
-                        // Reply with missing updates
-                        const targetStateVector = new Uint8Array(msg.data);
-                        const diff = Y.encodeStateAsUpdate(this.doc, targetStateVector);
-                        if (diff.byteLength > 0) {
-                            conn.send({ type: 'sync-update', data: Array.from(diff) });
-                        }
-                        break;
+                    // HOST RELAY LOGIC
+                    // If we are Host, we must forward this binary blob to other guests
+                    if (isHost) {
+                        this.connections.forEach((otherConn, peerId) => {
+                            if (peerId !== conn.peer && otherConn.open) {
+                                otherConn.send(update);
+                            }
+                        });
+                    }
+                    return;
+                }
 
-                    case 'sync-update':
-                        // 1. Apply update locally. 
-                        // IMPORTANT: Pass 'this' as origin so doc.on('update') knows not to re-broadcast blindly
-                        Y.applyUpdate(this.doc, new Uint8Array(msg.data), this);
+                // 2. If it's an Object, it's a Control Message
+                if (typeof msg === 'object') {
+                    switch (msg.type) {
+                        case 'sync-step-1':
+                            const targetStateVector = new Uint8Array(msg.data);
+                            const diff = Y.encodeStateAsUpdate(this.doc, targetStateVector);
+                            if (diff.byteLength > 0) {
+                                conn.send(diff); // Reply with RAW BINARY
+                            }
+                            break;
 
-                        // 2. HOST RELAY LOGIC
-                        // If I am the Host, I must forward this update to ALL other connected guests
-                        // so Guest B sees what Guest A drew.
-                        if (isHost) {
-                            this.connections.forEach((otherConn, peerId) => {
-                                // Don't send it back to the person who sent it
-                                if (peerId !== conn.peer && otherConn.open) {
-                                    otherConn.send(msg);
-                                }
-                            });
-                        }
-                        break;
+                        case 'announce-user':
+                            if (isHost) {
+                                yUsers.set(msg.user.id, msg.user);
+                            }
+                            break;
 
-                    case 'announce-user':
-                        if (isHost) {
-                            yUsers.set(msg.user.id, msg.user);
-                        }
-                        break;
-                        
-                    case 'ping': break;
+                        case 'ping':
+                            break;
+                    }
                 }
             }
 
             broadcast(msg) {
                 this.connections.forEach(conn => {
-                    if (conn.open) conn.send(msg);
+                    if (conn.open) {
+                        conn.send(msg);
+                    }
                 });
             }
         }
 
-        // --- 4. INITIALIZATION ---
-        const peer = new Peer(null, { 
+        // --- 5. INITIALIZATION & HELPERS ---
+
+        const peer = new Peer(null, {
             debug: 1,
             config: {
                 'iceServers': [
@@ -337,12 +441,11 @@
                 ]
             }
         });
-        
+
         let provider;
 
         peer.on('open', (id) => {
             provider = new PeerJsProvider(doc, peer);
-
             if (isHost) {
                 document.getElementById('peerIdDisplay').innerText = "Host ID: " + id;
                 window.history.replaceState(null, null, `${window.location.pathname}?id=${id}`);
@@ -350,7 +453,7 @@
                 updateStatus(0);
             } else {
                 document.getElementById('peerIdDisplay').innerText = "Guest Mode";
-                if(hostId) {
+                if (hostId) {
                     provider.connectTo(hostId);
                 } else {
                     showError("URL missing Host ID.");
@@ -359,30 +462,33 @@
         });
 
         peer.on('error', (err) => {
-            console.error("Peer Error:", err);
-            if(err.type === 'peer-unavailable') showError("Host not found/offline.");
-            else if (err.type === 'network') showError("Network error.");
-            else showError(`Error: ${err.type}`);
+            if (err.type === 'peer-unavailable') {
+                showError("Host not found.");
+            } else {
+                showError("Network Error");
+            }
         });
 
-        peer.on('disconnected', () => peer.reconnect());
+        peer.on('disconnected', () => {
+            peer.reconnect();
+        });
 
-        // --- 5. UI HELPERS ---
         function showError(msg) {
             const el = document.getElementById('errorMsg');
             el.style.display = 'block';
             el.innerText = msg;
             document.getElementById('statusDot').className = "dot error-dot";
-            document.getElementById('statusText').innerText = "Error";
         }
-        function hideError() { document.getElementById('errorMsg').style.display = 'none'; }
+
+        function hideError() {
+            document.getElementById('errorMsg').style.display = 'none';
+        }
 
         function updateStatus(count) {
             const text = document.getElementById('statusText');
             const dot = document.getElementById('statusDot');
-            
             if ((isHost && !peer.disconnected) || (!isHost && count > 0)) {
-                text.innerText = isHost ? `Hosting (${count + 1} users)` : `Connected`;
+                text.innerText = isHost ? `Hosting (${count + 1})` : `Connected`;
                 dot.className = "dot connected";
             } else {
                 text.innerText = "Waiting...";
@@ -390,38 +496,30 @@
             }
         }
 
-        // Render User List
         yUsers.observe(() => {
             const container = document.getElementById('usersContainer');
             container.innerHTML = '';
-            
-            // Convert to array to sort nicely (Host first, then others)
-            const users = Array.from(yUsers.values());
-            
-            users.forEach(user => {
+            Array.from(yUsers.values()).forEach(user => {
                 const div = document.createElement('div');
                 div.className = 'user-item';
                 const isMe = user.id === peer.id;
                 div.innerHTML = `
                     <div class="user-color-indicator" style="background:${user.uiColor}"></div>
-                    <span style="font-weight:${isMe ? 'bold' : 'normal'}">
-                        ${user.name} ${isMe ? '(You)' : ''}
-                    </span>
+                    <span style="font-weight:${isMe ? 'bold' : 'normal'}">${user.name} ${isMe ? '(You)' : ''}</span>
                 `;
                 container.appendChild(div);
             });
-            
-            // Update the count in status text if host
-            if(isHost) updateStatus(provider.connections.size);
+            if (isHost) {
+                updateStatus(provider.connections.size);
+            }
         });
 
-        // --- 6. CANVAS LOGIC (Same as before) ---
+        // --- 6. CANVAS INPUT & RENDER LOGIC ---
+
         const canvas = document.getElementById('c');
         const ctx = canvas.getContext('2d');
-        const colorInput = document.getElementById('colorPicker');
         let pointers = new Map();
         let camera = { x: 0, y: 0, zoom: 1 };
-        
         let currentStrokeYArray = null;
         let isPanning = false;
         let lastPinchDist = 0;
@@ -438,10 +536,17 @@
         resize();
 
         function screenToWorld(sx, sy) {
-            return { x: (sx - camera.x) / camera.zoom, y: (sy - camera.y) / camera.zoom };
+            return {
+                x: (sx - camera.x) / camera.zoom,
+                y: (sy - camera.y) / camera.zoom
+            };
         }
+
         function getMidpoint(p1, p2) {
-            return { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+            return {
+                x: (p1.x + p2.x) / 2,
+                y: (p1.y + p2.y) / 2
+            };
         }
 
         canvas.addEventListener('wheel', e => {
@@ -450,6 +555,7 @@
             const mouseX = e.clientX;
             const mouseY = e.clientY;
             const newZoom = Math.min(Math.max(camera.zoom * factor, 0.1), 10);
+
             camera.x = mouseX - (mouseX - camera.x) * (newZoom / camera.zoom);
             camera.y = mouseY - (mouseY - camera.y) * (newZoom / camera.zoom);
             camera.zoom = newZoom;
@@ -460,16 +566,24 @@
             canvas.setPointerCapture(e.pointerId);
             pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-            if (e.button === 1) { isPanning = true; return; }
-            if (pointers.size === 2) { currentStrokeYArray = null; return; }
+            if (e.button === 1) {
+                isPanning = true;
+                return;
+            }
+            if (pointers.size === 2) {
+                currentStrokeYArray = null;
+                return;
+            }
 
             if (pointers.size === 1 && e.button === 0 && !isPanning) {
                 doc.transact(() => {
                     const newStrokeMap = new Y.Map();
                     const newPointsArray = new Y.Array();
-                    newStrokeMap.set('color', colorInput.value);
+
+                    // USE SELECTED COLOR from Global State
+                    newStrokeMap.set('color', selectedColor);
                     newStrokeMap.set('points', newPointsArray);
-                    
+
                     const worldPos = screenToWorld(e.clientX, e.clientY);
                     const pressure = e.pressure !== 0.5 && e.pressure > 0 ? e.pressure : 0.5;
                     newPointsArray.push([{ x: worldPos.x, y: worldPos.y, p: pressure }]);
@@ -494,18 +608,24 @@
                 currentStrokeYArray.push([{ x: worldPos.x, y: worldPos.y, p: pressure }]);
             } else if (pointers.size === 2) {
                 const pts = Array.from(pointers.values());
-                if (pts[0] === p) { pts[0].x = e.clientX; pts[0].y = e.clientY; }
-                else { pts[1].x = e.clientX; pts[1].y = e.clientY; }
-                
+                if (pts[0] === p) {
+                    pts[0].x = e.clientX;
+                    pts[0].y = e.clientY;
+                } else {
+                    pts[1].x = e.clientX;
+                    pts[1].y = e.clientY;
+                }
+
                 const midpoint = getMidpoint(pts[0], pts[1]);
                 const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
 
                 if (lastMidpoint && lastPinchDist > 0) {
                     camera.x += midpoint.x - lastMidpoint.x;
                     camera.y += midpoint.y - lastMidpoint.y;
-                    
+
                     const factor = dist / lastPinchDist;
                     const newZoom = Math.min(Math.max(camera.zoom * factor, 0.1), 10);
+
                     camera.x = midpoint.x - (midpoint.x - camera.x) * (newZoom / camera.zoom);
                     camera.y = midpoint.y - (midpoint.y - camera.y) * (newZoom / camera.zoom);
                     camera.zoom = newZoom;
@@ -521,8 +641,14 @@
         canvas.addEventListener('pointerup', e => {
             pointers.delete(e.pointerId);
             currentStrokeYArray = null;
-            if (pointers.size < 2) { lastPinchDist = 0; lastMidpoint = null; }
-            if (e.button === 1) isPanning = false;
+
+            if (pointers.size < 2) {
+                lastPinchDist = 0;
+                lastMidpoint = null;
+            }
+            if (e.button === 1) {
+                isPanning = false;
+            }
         });
 
         function render() {
@@ -537,13 +663,14 @@
                 const points = strokeMap.get('points');
                 if (!points || points.length < 2) return;
                 const pts = points.toArray();
+
                 ctx.strokeStyle = strokeMap.get('color') || '#000';
-                
                 ctx.beginPath();
                 for (let i = 1; i < pts.length; i++) {
                     const p1 = pts[i - 1];
                     const p2 = pts[i];
                     ctx.lineWidth = 1 + (p1.p * 10);
+
                     ctx.beginPath();
                     ctx.moveTo(p1.x, p1.y);
                     ctx.lineTo(p2.x, p2.y);
@@ -559,16 +686,17 @@
         };
 
         window.clearCanvas = () => {
-            if(confirm("Clear canvas for everyone?")) {
+            if (confirm("Clear canvas?")) {
                 doc.transact(() => yStrokes.delete(0, yStrokes.length));
             }
         };
 
         window.newSession = () => {
-            if(confirm("Start a brand new session?")) {
+            if (confirm("Start new session?")) {
                 window.location.href = window.location.pathname;
             }
         };
     </script>
 </body>
+
 </html>
